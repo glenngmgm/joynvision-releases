@@ -1,0 +1,87 @@
+# Is app.joynvision.com up? Checked from OUTSIDE the server.
+#
+# WHY IT LIVES IN THIS REPOSITORY AND NOT THE PRODUCT ONE
+# -------------------------------------------------------
+# It ran in the private repo every ten minutes: 144 runs a day, and GitHub bills
+# a minimum of one minute per run whatever it does. That is about 4,320 minutes
+# a month against a free allowance of 2,000, so this one check needed twice the
+# entire budget by itself. It exhausted the minutes, every scheduled run then
+# failed in two seconds with a billing error, the owner was emailed each time,
+# and the Windows installer build - which bills at DOUBLE rate - had nothing
+# left to run on.
+#
+# Public repositories get unlimited free minutes. This check needs no secrets:
+# it asks a public address the same questions a customer's browser would, and
+# reads a certificate any visitor can read. So it belongs here, and the private
+# allowance goes back to building the installer.
+#
+# WHY THIS EXISTS
+# ---------------
+# Every alert JoynVision sends is sent by the JoynVision server. If that server,
+# its disk, its database or its network goes down, the thing that would have
+# told somebody is the thing that went down. Customers would find out first,
+# by opening a blank page, and the operator second, from them.
+#
+# This runs on GitHub's machines, which share nothing with the Oracle box in
+# Batam. It asks the same questions a customer's browser would, and a failed
+# run is emailed by GitHub to the repository owner.
+#
+# It must live on the default branch: GitHub only runs schedules from there.
+#
+# NOT A HAIR TRIGGER. A deploy rolls one replica at a time and never drops the
+# site, but a single slow answer from across the world is not an outage, so a
+# check has to fail three times, a minute apart, before the run fails.
+name: Uptime
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: The site, the API and the certificate
+        env:
+          SITE: https://app.joynvision.com
+        run: |
+          set -u
+          attempt() {
+            local ok=1
+            # 1. The API is alive and answering through the proxy.
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$SITE/healthz") || code=000
+            [ "$code" = "200" ] || { echo "  /healthz answered $code"; ok=0; }
+            # 2. The web app renders the page a customer lands on.
+            body=$(curl -s --max-time 20 "$SITE/login") || body=""
+            echo "$body" | grep -q "JoynVision" || { echo "  /login did not render"; ok=0; }
+            # 3. The database is reachable: this public endpoint reads settings
+            #    the server needs to answer signups.
+            info=$(curl -s --max-time 20 "$SITE/api/public/signup-info") || info=""
+            echo "$info" | grep -q '"trial_days"' || { echo "  signup-info did not answer: ${info:0:120}"; ok=0; }
+            return $((1 - ok))
+          }
+
+          for i in 1 2 3; do
+            if attempt; then echo "up (attempt $i)"; break; fi
+            if [ "$i" = "3" ]; then
+              echo "::error::app.joynvision.com failed three checks a minute apart"
+              exit 1
+            fi
+            sleep 60
+          done
+
+          # 4. A certificate that expires takes the whole site down for every
+          #    customer at once, and renewal is automatic until the day it is not.
+          end=$(echo | openssl s_client -servername app.joynvision.com -connect app.joynvision.com:443 2>/dev/null \
+                | openssl x509 -noout -enddate | cut -d= -f2)
+          left=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+          echo "certificate expires $end ($left days)"
+          if [ "$left" -lt 14 ]; then
+            echo "::error::the TLS certificate for app.joynvision.com expires in $left days"
+            exit 1
+          fi
