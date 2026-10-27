@@ -29,8 +29,27 @@ printf '%s\n' "$OCI_KEY" > "$KEYFILE"; chmod 600 "$KEYFILE"
 
 out() { [ -n "${GITHUB_OUTPUT:-}" ] && echo "won=$1" >> "$GITHUB_OUTPUT"; }
 
+# HOW LONG ONE RUN KEEPS ASKING, and why this is not one request per run.
+#
+# A workflow set to every five minutes does not run every five minutes. The
+# uptime check in this same repository is set to every ten and actually runs
+# every four hours: median 229 minutes between runs, worst case 378. GitHub
+# deprioritises schedules and silently skips them, and nothing in the workflow
+# file hints at it. A once-per-run script on a five minute cron would therefore
+# have asked Oracle about six times a day while claiming to ask 288 times, and
+# the claim is worse than the gap.
+#
+# A hosted runner may live six hours, so instead each run STAYS and asks every
+# minute until its time is up. GitHub firing the schedule a few times a day is
+# then enough for near continuous cover, because each firing buys hours rather
+# than one request. Minutes are free on a public repository, so the only cost is
+# a runner sitting in a sleep loop.
+LOOP_MINUTES=${LOOP_MINUTES:-330}   # runner hard limit is 360
+EVERY_SECONDS=${EVERY_SECONDS:-60}
+
 sign() { printf '%s' "$1" | openssl dgst -sha256 -sign "$KEYFILE" | openssl enc -e -base64 -A; }
 
+ask_once() {
 # THREE CORNERS, AND ORACLE'S OWN PICK. Capacity is counted per fault domain, so
 # "out of host capacity" answers for one corner of the room, not the room. Which
 # corner this run asks is derived from the clock, so consecutive runs differ with
@@ -78,11 +97,27 @@ if [ "$CODE" = "PARSE" ]; then
 fi
 
 case "$CODE" in
-  OK)              out yes; echo "a server was created, $OCPUS OCPU / $MEMGB GB" ; exit 0 ;;
+  OK)              echo "$(date -u '+%H:%M:%S') a server was created, $OCPUS OCPU / $MEMGB GB"; return 0 ;;
   InternalError|OutOfCapacity)
-                   out no;  echo "no free host: $WHERE was full" ;;
-  TooManyRequests) out no;  echo "rate limited, the next run asks again" ;;
-  LimitExceeded)   out no;  echo "quota refused at $OCPUS/$MEMGB - the allowance changed, check the shape" ;;
-  *)               out no;  echo "refused: $CODE" ;;
+                   echo "$(date -u '+%H:%M:%S') no free host: $WHERE was full" ;;
+  TooManyRequests) echo "$(date -u '+%H:%M:%S') rate limited, asking again shortly" ;;
+  LimitExceeded)   echo "$(date -u '+%H:%M:%S') quota refused at $OCPUS/$MEMGB - the allowance changed, check the shape" ;;
+  *)               echo "$(date -u '+%H:%M:%S') refused: $CODE" ;;
 esac
+return 1
+}
+
+DEADLINE=$(( $(date +%s) + LOOP_MINUTES * 60 ))
+tries=0
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+  tries=$((tries + 1))
+  if ask_once; then
+    out yes
+    echo "stopped after $tries tries because there is a server"
+    exit 0
+  fi
+  sleep "$EVERY_SECONDS"
+done
+out no
+echo "gave up this run after $tries tries over $LOOP_MINUTES minutes; the next scheduled run carries on"
 exit 0

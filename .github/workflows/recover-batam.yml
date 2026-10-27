@@ -14,9 +14,25 @@
 # at four in the morning, shares nothing with Oracle, and costs nothing.
 #
 # WHY THIS REPOSITORY. joynvision-releases is public, and public repositories
-# get unlimited Actions minutes. Five minutes is 288 runs a day; the private
-# repo's 2,000 a month would be gone in two days, which is the same arithmetic
-# that moved the uptime check here.
+# get unlimited Actions minutes. The private repo's 2,000 a month would not
+# cover a single long-running job, which is the same arithmetic that moved the
+# uptime check here.
+#
+# AND WHY ONE RUN STAYS FOR HOURS INSTEAD OF ASKING ONCE
+# ------------------------------------------------------
+# A workflow set to every five minutes does not run every five minutes. The
+# uptime check in this very repository is set to every ten and actually runs
+# about every four hours: median 229 minutes between runs over the last day and
+# a half, worst case 378. GitHub deprioritises schedules and quietly skips them,
+# and nothing in a workflow file hints at it.
+#
+# So a once-per-run script on a five minute cron would have asked Oracle roughly
+# six times a day while appearing to ask 288 times, and appearing to is worse
+# than the gap itself. A hosted runner may live six hours, so each run now stays
+# and keeps asking. GitHub firing the schedule a few times a day is then enough
+# for near continuous cover, because each firing buys hours rather than one
+# request. The cron stays at five minutes not because it will be honoured but
+# because it means a new run starts as soon as GitHub is willing.
 #
 # AND THE ONE THING THAT MAKES IT DIFFERENT FROM uptime.yml
 # ---------------------------------------------------------
@@ -42,14 +58,17 @@ on:
 permissions:
   actions: write        # only so a successful run can switch this schedule off
 
+# One run at a time, and a new one WAITS rather than killing the live one, so
+# they hand over: whichever is running keeps asking, and the next takes up when
+# its predecessor's six hours are spent.
 concurrency:
-  group: recover-batam  # two runs asking at once would only feed the rate limiter
+  group: recover-batam
   cancel-in-progress: false
 
 jobs:
   ask:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 350   # the runner's own hard limit is 360
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +81,11 @@ jobs:
           OCI_KEY:   ${{ secrets.OCI_KEY }}
           BOOTVOL:   ${{ secrets.OCI_BOOTVOL }}
           SUBNET:    ${{ secrets.OCI_SUBNET }}
+          # Every two minutes rather than every one. The Mac loop asks once a
+          # minute and Oracle counts its rate limit per USER, not per machine, so
+          # both asking at the same cadence only means both being turned away.
+          # This is the backstop for the hours the laptop is asleep.
+          EVERY_SECONDS: '120'
         run: bash recover-batam.sh
 
       - name: Say so, and stop asking
