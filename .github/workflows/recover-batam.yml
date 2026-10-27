@@ -1,0 +1,101 @@
+# Ask Oracle for a server every five minutes, from a machine that is not a
+# laptop. READY TO INSTALL, NOT INSTALLED: the checklist is at the bottom.
+#
+# WHY THIS IS NEEDED WHEN a1-recover.sh ALREADY EXISTS
+# ----------------------------------------------------
+# That one does the same job better, once a minute instead of once every five.
+# It just runs on a MacBook. launchd will not fire a scheduled job while the
+# machine is asleep, and closing the lid sleeps it whatever power assertion is
+# held, so a shut laptop is a night of not asking and the slot that came free at
+# four in the morning goes to somebody else.
+#
+# There is no other machine. The server that would normally watch itself is the
+# one that is down. GitHub's runners are the only thing available that is awake
+# at four in the morning, shares nothing with Oracle, and costs nothing.
+#
+# WHY THIS REPOSITORY. joynvision-releases is public, and public repositories
+# get unlimited Actions minutes. Five minutes is 288 runs a day; the private
+# repo's 2,000 a month would be gone in two days, which is the same arithmetic
+# that moved the uptime check here.
+#
+# AND THE ONE THING THAT MAKES IT DIFFERENT FROM uptime.yml
+# ---------------------------------------------------------
+# That workflow says in its own comments that it needs no secrets, and that was
+# part of why a public repository was safe for it. THIS NEEDS A KEY TO THE
+# ORACLE ACCOUNT. Repository secrets are encrypted, are withheld from workflows
+# on forked pull requests, and schedules only ever run from the default branch -
+# but it is still a credential to the whole tenancy living in a public
+# repository, and that is the account owner's call to make, not mine.
+#
+# If this outlives the outage, the right shape is a second Oracle user whose
+# policy allows only instance-family in this one compartment, with its own key.
+#
+# IT STOPS ITSELF on success, the same job the .a1-recovered marker does on the
+# Mac, so a schedule nobody remembers cannot build a fleet.
+name: Bring the Batam server back
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write        # only so a successful run can switch this schedule off
+
+concurrency:
+  group: recover-batam  # two runs asking at once would only feed the rate limiter
+  cancel-in-progress: false
+
+jobs:
+  ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ask Oracle for a host
+        id: ask
+        env:
+          TENANCY:   ${{ secrets.OCI_TENANCY }}
+          USER_OCID: ${{ secrets.OCI_USER }}
+          FP:        ${{ secrets.OCI_FINGERPRINT }}
+          OCI_KEY:   ${{ secrets.OCI_KEY }}
+          BOOTVOL:   ${{ secrets.OCI_BOOTVOL }}
+          SUBNET:    ${{ secrets.OCI_SUBNET }}
+        run: bash recover-batam.sh
+
+      - name: Say so, and stop asking
+        if: steps.ask.outputs.won == 'yes'
+        env:
+          TG:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          GH:   ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -o /dev/null --max-time 20 \
+            "https://api.telegram.org/bot${TG}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT}" \
+            --data-urlencode "text=JoynVision has a server again, booting from the original disk. One thing is still missing: the video relay needs its new address, which deployment/oracle/post-recover.sh does." || true
+          curl -s -o /dev/null -X PUT \
+            -H "Authorization: Bearer $GH" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/recover-batam.yml/disable" || true
+
+# ---------------------------------------------------------------------------
+# TO INSTALL, once the owner has decided about the key
+#
+#   1. Copy BOTH files to glenngmgm/joynvision-releases on the DEFAULT BRANCH:
+#        recover-batam.sh                      -> recover-batam.sh
+#        recover-batam.yml                     -> .github/workflows/recover-batam.yml
+#      Schedules only run from the default branch.
+#   2. Add these repository secrets:
+#        OCI_TENANCY OCI_USER OCI_FINGERPRINT   from ~/.oci/config
+#        OCI_KEY                                 ~/.oci/joynvision_api_key.pem
+#        OCI_BOOTVOL OCI_SUBNET                  the two OCIDs in a1-recover.sh
+#        TELEGRAM_BOT_TOKEN TELEGRAM_CHAT        ~/.joynvision-secrets
+#   3. Run it once from the Actions tab and read what Oracle answered.
+#   4. Turn off the Mac loop, or leave both: the duplicate-launch guard in each
+#      asks Oracle what is running before believing it has won.
+#
+# WHEN THE SERVER IS BACK: delete the OCI_* secrets. A key to the cloud account
+# should not outlive the outage it was added for.
+# ---------------------------------------------------------------------------
