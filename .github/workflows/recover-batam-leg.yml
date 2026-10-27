@@ -1,0 +1,75 @@
+# One leg of the recovery: up to 350 minutes of asking Oracle for a host.
+#
+# WHY A REUSABLE WORKFLOW AND NOT JUST A LONGER JOB
+# -------------------------------------------------
+# A hosted runner is killed at 6 hours, so one job can cover at most that. But a
+# workflow RUN may last days, and every job inside it gets its own 6 hour
+# allowance. So the caller chains four of these and a single start from GitHub
+# buys about 23 hours of continuous asking.
+#
+# That matters because GitHub's scheduler cannot be relied on. The uptime check
+# in this repository is set to every ten minutes and actually starts about every
+# four hours, and this workflow had not been started by the scheduler once in
+# the first hour of its life. Chaining means one start is enough for a day,
+# instead of needing the scheduler to behave.
+#
+# Each leg asks Oracle whether a server already exists before it asks for one,
+# so the moment any leg or the laptop wins, the rest have nothing to do.
+on:
+  workflow_call:
+    inputs:
+      # 350 in earnest. Overridable ONLY so the chain itself can be proved in
+      # minutes instead of a day: four legs of 350 take 23 hours to watch, and
+      # an unproven chain is worth nothing on the night it is needed.
+      minutes:
+        description: How long this leg keeps asking
+        type: number
+        default: 350
+    outputs:
+      won:
+        description: Whether a server exists by the end of this leg
+        value: ${{ jobs.ask.outputs.won }}
+
+permissions:
+  actions: write        # only so a winning leg can switch the schedule off
+
+jobs:
+  ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.minutes }}   # the runner's own hard limit is 360
+    outputs:
+      won: ${{ steps.ask.outputs.won }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ask Oracle for a host
+        id: ask
+        env:
+          TENANCY:   ${{ secrets.OCI_TENANCY }}
+          USER_OCID: ${{ secrets.OCI_USER }}
+          FP:        ${{ secrets.OCI_FINGERPRINT }}
+          OCI_KEY:   ${{ secrets.OCI_KEY }}
+          BOOTVOL:   ${{ secrets.OCI_BOOTVOL }}
+          SUBNET:    ${{ secrets.OCI_SUBNET }}
+          # Every two minutes. Oracle counts its rate limit per USER, not per
+          # machine, so matching the laptop loop's one minute would only mean
+          # both being turned away.
+          EVERY_SECONDS: '120'
+          LOOP_MINUTES: ${{ inputs.minutes }}
+        run: bash recover-batam.sh
+
+      - name: Say so, and stop asking
+        if: steps.ask.outputs.won == 'yes'
+        env:
+          TG:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          GH:   ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -o /dev/null --max-time 20 \
+            "https://api.telegram.org/bot${TG}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT}" \
+            --data-urlencode "text=JoynVision has a server again, booting from the original disk. One thing is still missing: the video relay needs its new address, which deployment/oracle/post-recover.sh does." || true
+          curl -s -o /dev/null -X PUT \
+            -H "Authorization: Bearer $GH" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/recover-batam.yml/disable" || true

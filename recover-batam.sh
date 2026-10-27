@@ -84,12 +84,7 @@ CODE=${CODE:-PARSE}
 # A reply we cannot read may still have been a launch, and guessing wrong here
 # builds a second server on the next run. So ask what is actually running.
 if [ "$CODE" = "PARSE" ]; then
-  D2=$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S GMT")
-  S2=$(printf '(request-target): get /20160918/instances?compartmentId=%s\ndate: %s\nhost: %s' "$TENANCY" "$D2" "$HOST")
-  LIVE=$(curl -s --max-time 45 "https://$HOST/20160918/instances?compartmentId=$TENANCY" \
-    -H "date: $D2" -H "host: $HOST" \
-    -H "Authorization: Signature version=\"1\",keyId=\"$KEYID\",algorithm=\"rsa-sha256\",headers=\"(request-target) date host\",signature=\"$(sign "$S2")\"" \
-    | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(len([i for i in d if i.get('lifecycleState') not in ('TERMINATED','TERMINATING')]))" 2>/dev/null)
+  LIVE=$(live_instances)
   if [ "${LIVE:-0}" -gt 0 ] 2>/dev/null; then
     echo "Oracle's reply was unreadable but a machine is running, so a server exists"
     CODE=OK
@@ -106,6 +101,32 @@ case "$CODE" in
 esac
 return 1
 }
+
+# IS THERE ALREADY A SERVER? ASK BEFORE ASKING FOR ONE.
+#
+# Several of these run one after another, and the Mac loop runs too. Whichever
+# wins, the others must not carry on requesting machines. The reliable signal is
+# not a file or a job output, it is Oracle: one question, before the loop, and
+# again whenever a reply cannot be read.
+#
+# It is also the honest answer to "did it work" after any confusion, which during
+# this outage there has been plenty of.
+live_instances() {
+  local d sig
+  d=$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S GMT")
+  sig=$(sign "$(printf '(request-target): get /20160918/instances?compartmentId=%s\ndate: %s\nhost: %s' "$TENANCY" "$d" "$HOST")")
+  curl -s --max-time 45 "https://$HOST/20160918/instances?compartmentId=$TENANCY" \
+    -H "date: $d" -H "host: $HOST" \
+    -H "Authorization: Signature version=\"1\",keyId=\"$KEYID\",algorithm=\"rsa-sha256\",headers=\"(request-target) date host\",signature=\"$sig\"" \
+    | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(len([i for i in d if i.get('lifecycleState') not in ('TERMINATED','TERMINATING')]))" 2>/dev/null
+}
+
+already=$(live_instances)
+if [ "${already:-0}" -gt 0 ] 2>/dev/null; then
+  out yes
+  echo "there is already a server running, so this run has nothing to do"
+  exit 0
+fi
 
 DEADLINE=$(( $(date +%s) + LOOP_MINUTES * 60 ))
 tries=0
