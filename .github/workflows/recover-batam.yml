@@ -50,6 +50,16 @@ on:
         type: string
         default: '350' 
 
+# A CALLED WORKFLOW CANNOT ASK FOR MORE THAN ITS CALLER WAS GIVEN.
+#
+# This repository's default workflow token is read only. The leg needs
+# actions:write, for the one thing it does on winning: switch this schedule off.
+# Declared only in the leg, that was an escalation above the caller's inherited
+# read, and every run died in seconds with startup_failure and no message in the
+# API - including, silently, every scheduled one.
+permissions:
+  actions: write
+
 # One run at a time, and a new one WAITS rather than killing the live one, so
 # they hand over instead of overlapping.
 concurrency:
