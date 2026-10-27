@@ -47,8 +47,8 @@ on:
     inputs:
       minutes_per_leg:
         description: Minutes each leg keeps asking (350 in earnest; set it low to prove the chain)
-        type: number
-        default: 350
+        type: string
+        default: '350' 
 
 # One run at a time, and a new one WAITS rather than killing the live one, so
 # they hand over instead of overlapping.
@@ -61,7 +61,7 @@ jobs:
     uses: ./.github/workflows/recover-batam-leg.yml
     secrets: inherit
     with:
-      minutes: ${{ fromJSON(inputs.minutes_per_leg || 350) }}
+      minutes: ${{ inputs.minutes_per_leg || '350' }}
 
   # !cancelled() rather than success(): a leg that errors should not end the
   # chain, because the next one would have asked anyway. Only a cancelled run,
@@ -72,7 +72,7 @@ jobs:
     uses: ./.github/workflows/recover-batam-leg.yml
     secrets: inherit
     with:
-      minutes: ${{ fromJSON(inputs.minutes_per_leg || 350) }}
+      minutes: ${{ inputs.minutes_per_leg || '350' }}
 
   leg3:
     needs: leg2
@@ -80,7 +80,7 @@ jobs:
     uses: ./.github/workflows/recover-batam-leg.yml
     secrets: inherit
     with:
-      minutes: ${{ fromJSON(inputs.minutes_per_leg || 350) }}
+      minutes: ${{ inputs.minutes_per_leg || '350' }}
 
   leg4:
     needs: leg3
@@ -88,7 +88,7 @@ jobs:
     uses: ./.github/workflows/recover-batam-leg.yml
     secrets: inherit
     with:
-      minutes: ${{ fromJSON(inputs.minutes_per_leg || 350) }}
+      minutes: ${{ inputs.minutes_per_leg || '350' }}
 
 # ---------------------------------------------------------------------------
 # WHEN THE SERVER IS BACK

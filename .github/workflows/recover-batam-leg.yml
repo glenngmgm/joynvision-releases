@@ -23,8 +23,8 @@ on:
       # an unproven chain is worth nothing on the night it is needed.
       minutes:
         description: How long this leg keeps asking
-        type: number
-        default: 350
+        type: string
+        default: '350' 
     outputs:
       won:
         description: Whether a server exists by the end of this leg
@@ -36,7 +36,10 @@ permissions:
 jobs:
   ask:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.minutes }}   # the runner's own hard limit is 360
+    # A CAP, not the leg length. The loop stops itself after inputs.minutes;
+    # this is only the backstop if it somehow does not, and it is a literal
+    # because an expression here is one more thing that can fail at startup.
+    timeout-minutes: 355   # the runner's own hard limit is 360
     outputs:
       won: ${{ steps.ask.outputs.won }}
     steps:
