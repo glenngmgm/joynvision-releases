@@ -27,7 +27,14 @@ PRIVATE_IP=10.0.0.152
 # old instance and refuses that size on quota outright, and a request that
 # cannot succeed still spends one of the few the rate limiter allows. The Mac
 # loop re-tests it every half hour in case the allowance comes back.
-SIZES=("2 12" "1 6")
+# Ordered by likelihood of winning, not by size. Oracle halved the Always Free
+# A1 allowance from 4/24 to 2/12 and disabled free-only instances above the new
+# limit, which is exactly what happened here. So every affected user in the
+# world is now asking for the same 2/12 replacement: the famine at that size is
+# a stampede, not ordinary scarcity. 1/6 is inside the free limit, still 6 GB,
+# and far less contested; the stack ran inside 6 GB on a laptop before it ever
+# saw Oracle. 1/1 cannot serve but can be resized, and nobody is fighting for it.
+SIZES=("1 6" "1 1" "1 6" "2 12")
 
 for v in TENANCY USER_OCID FP OCI_KEY BOOTVOL SUBNET; do
   [ -n "${!v:-}" ] || { echo "missing $v"; exit 2; }
