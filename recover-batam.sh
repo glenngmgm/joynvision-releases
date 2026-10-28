@@ -15,8 +15,19 @@ set -uo pipefail
 HOST=iaas.ap-batam-1.oraclecloud.com
 AD='CLhg:AP-BATAM-1-AD-1'
 PRIVATE_IP=10.0.0.152
-OCPUS=${OCPUS:-2}
-MEMGB=${MEMGB:-12}
+# TWO SIZES, ALTERNATING, AND THE SMALL ONE IS NOT AN AFTERTHOUGHT.
+#
+# This asked only for 2 OCPU / 12 GB, for the same reason the Mac loop did: the
+# step down was written for a quota refusal, and 2/12 passes quota. So 26 hours
+# of asking never once tried 1 OCPU, and a one core slot frees up more often
+# than a two core one. The stack ran inside 6 GB on a laptop before it ever saw
+# Oracle, so a smaller server that exists still beats a larger one that does not.
+#
+# 4 OCPU is deliberately absent: Oracle cut the allowance when it disabled the
+# old instance and refuses that size on quota outright, and a request that
+# cannot succeed still spends one of the few the rate limiter allows. The Mac
+# loop re-tests it every half hour in case the allowance comes back.
+SIZES=("2 12" "1 6")
 
 for v in TENANCY USER_OCID FP OCI_KEY BOOTVOL SUBNET; do
   [ -n "${!v:-}" ] || { echo "missing $v"; exit 2; }
@@ -94,8 +105,8 @@ fi
 case "$CODE" in
   OK)              echo "$(date -u '+%H:%M:%S') a server was created, $OCPUS OCPU / $MEMGB GB"; return 0 ;;
   InternalError|OutOfCapacity)
-                   echo "$(date -u '+%H:%M:%S') no free host: $WHERE was full" ;;
-  TooManyRequests) echo "$(date -u '+%H:%M:%S') rate limited, asking again shortly" ;;
+                   echo "$(date -u '+%H:%M:%S') no free host for $OCPUS OCPU / $MEMGB GB: $WHERE was full" ;;
+  TooManyRequests) echo "$(date -u '+%H:%M:%S') rate limited asking for $OCPUS/$MEMGB, again shortly" ;;
   LimitExceeded)   echo "$(date -u '+%H:%M:%S') quota refused at $OCPUS/$MEMGB - the allowance changed, check the shape" ;;
   *)               echo "$(date -u '+%H:%M:%S') refused: $CODE" ;;
 esac
@@ -132,6 +143,8 @@ DEADLINE=$(( $(date +%s) + LOOP_MINUTES * 60 ))
 tries=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   tries=$((tries + 1))
+  size=${SIZES[$(( (tries - 1) % ${#SIZES[@]} ))]}
+  OCPUS=${size% *}; MEMGB=${size#* }
   if ask_once; then
     out yes
     echo "stopped after $tries tries because there is a server"
