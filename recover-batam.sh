@@ -68,12 +68,21 @@ EVERY_SECONDS=${EVERY_SECONDS:-60}
 sign() { printf '%s' "$1" | openssl dgst -sha256 -sign "$KEYFILE" | openssl enc -e -base64 -A; }
 
 ask_once() {
-# THREE CORNERS, AND ORACLE'S OWN PICK. Capacity is counted per fault domain, so
-# "out of host capacity" answers for one corner of the room, not the room. Which
-# corner this run asks is derived from the clock, so consecutive runs differ with
-# nothing stored between them.
-FDS=('"faultDomain":"FAULT-DOMAIN-1",' '"faultDomain":"FAULT-DOMAIN-2",' '"faultDomain":"FAULT-DOMAIN-3",' '')
-FD=${FDS[$(( ($(date +%s) / 300) % 4 ))]}
+# MOSTLY NO CORNER AT ALL, WHICH IS THE WIDER ASK AND ORACLE'S OWN ADVICE.
+#
+# Capacity is counted per fault domain, so naming one and being told it is full
+# answers for one corner of the room rather than the room. The first version
+# named a corner on three runs out of four to map them. Wrong way round: the
+# refusal itself says "Try creating the instance without specifying fault
+# domain", and a request that names none can be filled from ANY of the three, so
+# it wins whenever a named one would and whenever either of the others has room.
+#
+# One named corner still rides along, rotating, because a refusal carries the
+# fault domain back and that is the only way to see a corner that is cold for
+# good rather than briefly full. Which entry this run uses is derived from the
+# clock, so consecutive runs differ with nothing stored between them.
+FDS=('' '' '' '"faultDomain":"FAULT-DOMAIN-1",' '' '' '' '"faultDomain":"FAULT-DOMAIN-2",' '' '' '' '"faultDomain":"FAULT-DOMAIN-3",')
+FD=${FDS[$(( ($(date +%s) / 120) % ${#FDS[@]} ))]}
 # sed cannot supply the fallback: with an empty FD it is given no line at all
 # and prints nothing, so the empty case has to be handled by the shell.
 WHERE=${FD:+$(printf '%s' "$FD" | sed -E 's/.*"(FAULT-DOMAIN-[0-9])".*/\1/')}
