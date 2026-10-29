@@ -31,10 +31,28 @@
 # Oracle whether a server already exists before asking for one, so whichever of
 # the four legs or the laptop wins, nothing else goes on creating machines.
 #
-# THE KEY. Unlike uptime.yml, which says in its own comments that it needs no
-# secrets, this needs a key to the Oracle account in repository secrets. It is
-# here deliberately and temporarily. DELETE THE OCI_* SECRETS once the server is
-# back: a tenancy key should not outlive the outage it was added for.
+# THE KEY, AND WHY IT IS NOW ITS OWN LOGIN. Unlike uptime.yml, which says in its
+# own comments that it needs no secrets, this needs a key to the Oracle account
+# in repository secrets, in a PUBLIC repository.
+#
+# From 29 October that key belongs to `joynvision-asker-ci`, not to Glenn. Two
+# reasons, and the first was the surprise.
+#
+# Oracle's throttle message is "Too many requests for the USER", and it means
+# it. With both askers signing as Glenn, 490 of 843 requests were thrown away
+# on each other. Asking as a second login at three minute spacing, while the
+# first was being choked, got four real answers out of four. So a second login
+# is a second allowance, and the two loops stopped competing.
+#
+# The second reason is that a public repository should not hold an
+# administrator's key. This one is in the `joynvision-askers` group, whose whole
+# policy is instance-family, volume-family, virtual-network-family and inspect
+# compartments: enough to ask for a machine and attach the preserved disk,
+# nothing that can read a database, change a setting or spend money. Revoking it
+# is deleting one user.
+#
+# STILL DELETE THE OCI_* SECRETS once the server is back, and delete the user
+# with them. A narrow key is not a permanent one.
 name: Bring the Batam server back
 
 on:
@@ -102,7 +120,9 @@ jobs:
 
 # ---------------------------------------------------------------------------
 # WHEN THE SERVER IS BACK
-#   1. Delete the OCI_* repository secrets.
+#   1. Delete the OCI_* repository secrets, and delete the Oracle user
+#      `joynvision-asker-ci` (its OCID is in ~/.joynvision-secrets on the Mac),
+#      which revokes the key wherever a copy of it may have got to.
 #   2. Run deployment/oracle/post-recover.sh from the product repo: the public
 #      address changed with the old VNIC, and coturn and TURN_URLS still name
 #      the old one, so remote video fails for anyone off the shop wifi until
