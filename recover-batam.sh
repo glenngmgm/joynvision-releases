@@ -91,8 +91,8 @@ WHERE=${WHERE:-the placement Oracle picks}
 # 2 OCPU / 12 GB by default. Oracle cut the allowance when it disabled the old
 # instance: 4 OCPU is refused on quota outright, and a request that cannot
 # succeed still spends one of the few the rate limiter allows.
-BODY=$(printf '{"availabilityDomain":"%s",%s"compartmentId":"%s","displayName":"joynvision-central","shape":"VM.Standard.A1.Flex","shapeConfig":{"ocpus":%s,"memoryInGBs":%s},"sourceDetails":{"sourceType":"bootVolume","bootVolumeId":"%s"},"createVnicDetails":{"subnetId":"%s","privateIp":"%s","assignPublicIp":true}}' \
-  "$AD" "$FD" "$TENANCY" "$OCPUS" "$MEMGB" "$BOOTVOL" "$SUBNET" "$PRIVATE_IP")
+BODY=$(printf '{"availabilityDomain":"%s",%s"compartmentId":"%s","displayName":"joynvision-central","shape":"%s","shapeConfig":{"ocpus":%s,"memoryInGBs":%s},"sourceDetails":{"sourceType":"bootVolume","bootVolumeId":"%s"},"createVnicDetails":{"subnetId":"%s","privateIp":"%s","assignPublicIp":true}}' \
+  "$AD" "$FD" "$TENANCY" "${SHAPE_NAME:-VM.Standard.A1.Flex}" "$OCPUS" "$MEMGB" "$BOOTVOL" "$SUBNET" "$PRIVATE_IP")
 
 DATE=$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S GMT")
 BH=$(printf '%s' "$BODY" | openssl dgst -sha256 -binary | openssl enc -e -base64 -A)
@@ -155,10 +155,71 @@ if [ "${already:-0}" -gt 0 ] 2>/dev/null; then
   exit 0
 fi
 
+# WATCH FOR THE SECOND MACHINE TYPE OPENING, AND TAKE IT IF IT DOES.
+#
+# ap-batam-1 offers two shapes. A1 has had nothing spare since 27 October. A2 is
+# aarch64 too, so the preserved disk boots on it, and this account is already
+# allowed 8 A2 cores: the limit was never what stopped it. Oracle simply has not
+# finished turning A2 on here, which the shapes API states plainly as
+# minPerOcpuInGBs 0 and maxPerOcpuInGBs 0. Nothing can be sized into a range of
+# zero to zero.
+#
+# The day those become real numbers, A2 is an allowance we already hold with no
+# crowd in front of it. This watch exists in the Mac loop too, but the Mac is
+# off while Glenn travels from the end of November, which is exactly the stretch
+# where nobody would otherwise notice. One cheap read an hour.
+a2_is_open() {
+  local d sig path
+  path="/20160918/shapes?compartmentId=$TENANCY&availabilityDomain=CLhg%3AAP-BATAM-1-AD-1&limit=500"
+  d=$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S GMT")
+  sig=$(sign "$(printf '(request-target): get %s\ndate: %s\nhost: %s' "$path" "$d" "$HOST")")
+  curl -s --max-time 45 "https://$HOST$path" \
+    -H "date: $d" -H "host: $HOST" \
+    -H "Authorization: Signature version=\"1\",keyId=\"$KEYID\",algorithm=\"rsa-sha256\",headers=\"(request-target) date host\",signature=\"$sig\"" \
+  | python3 -c 'import json,sys
+try:
+    d=json.loads(sys.stdin.read())
+    if not isinstance(d, list): raise ValueError(d)
+    for sh in d:
+        if sh.get("shape")=="VM.Standard.A2.Flex":
+            print((sh.get("memoryOptions") or {}).get("maxPerOcpuInGBs") or 0); break
+    else: raise ValueError("A2 not offered")
+except Exception: print("ERR")' 2>/dev/null
+}
+
 DEADLINE=$(( $(date +%s) + LOOP_MINUTES * 60 ))
 tries=0
+a2_open=no
+a2_last=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   tries=$((tries + 1))
+
+  if [ "$a2_open" = no ] && [ $(( $(date +%s) - a2_last )) -ge 3600 ]; then
+    a2_last=$(date +%s)
+    a2max=$(a2_is_open)
+    case "$a2max" in
+      ERR|'')
+        # A failed read is not the same fact as "A2 is still shut", and printing
+        # 0 for both is how a watch dies without anyone noticing.
+        echo "$(date -u '+%H:%M:%S') cannot read whether A2 has opened - the watch is blind this hour" ;;
+      0|0.0) ;;
+      *)
+      a2_open=yes
+      echo "A2 HAS OPENED IN BATAM: maxPerOcpuInGBs=$a2max - asking for it as well from now on"
+      curl -s -o /dev/null --max-time 20 \
+        "https://api.telegram.org/bot${TG:-}/sendMessage" \
+        --data-urlencode "chat_id=${CHAT:-}" \
+        --data-urlencode "text=Oracle has just turned on the second ARM machine type in Batam. Nobody is queueing for it and your account is already allowed it, so JoynVision now asks for that as well as the one everyone is fighting over." || true ;;
+    esac
+  fi
+
+  # A2 takes every other turn once it is open, so A1 is never abandoned: the
+  # check says A2 can be SIZED, not that it has a free host.
+  SHAPE_NAME=VM.Standard.A1.Flex
+  if [ "$a2_open" = yes ] && [ $(( tries % 2 )) -eq 0 ]; then
+    SHAPE_NAME=VM.Standard.A2.Flex
+  fi
+
   size=${SIZES[$(( (tries - 1) % ${#SIZES[@]} ))]}
   OCPUS=${size% *}; MEMGB=${size#* }
   if ask_once; then
