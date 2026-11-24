@@ -54,6 +54,12 @@ jobs:
           OCI_KEY:   ${{ secrets.OCI_KEY }}
           BOOTVOL:   ${{ secrets.OCI_BOOTVOL }}
           SUBNET:    ${{ secrets.OCI_SUBNET }}
+          # The asker now watches for the second ARM shape opening in Batam and
+          # says so on Telegram if it does. Without these two here that message
+          # would post to an empty token and vanish, which is the quiet kind of
+          # failure this whole setup keeps being bitten by.
+          TG:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT:      ${{ secrets.TELEGRAM_CHAT }}
           # Every two minutes. Oracle counts its rate limit per USER, not per
           # machine, so matching the laptop loop's one minute would only mean
           # both being turned away.
